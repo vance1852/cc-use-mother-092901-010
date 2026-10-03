@@ -63,6 +63,144 @@ CREATE TABLE IF NOT EXISTS audit_events (
     event_hash TEXT NOT NULL UNIQUE,
     occurred_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS facilities (
+    facility_id TEXT PRIMARY KEY,
+    site_id TEXT NOT NULL REFERENCES sites(site_id),
+    facility_type TEXT NOT NULL,
+    location TEXT NOT NULL,
+    description TEXT NOT NULL,
+    affected_groups_json TEXT NOT NULL,
+    sole_accessible_route INTEGER NOT NULL CHECK(sole_accessible_route IN (0, 1)),
+    available INTEGER NOT NULL CHECK(available IN (0, 1)),
+    available_note TEXT,
+    current_incident_id TEXT,
+    version INTEGER NOT NULL CHECK(version >= 1),
+    created_by TEXT NOT NULL REFERENCES actors(actor_id),
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS maintenance_contracts (
+    contract_id TEXT PRIMARY KEY,
+    site_id TEXT NOT NULL REFERENCES sites(site_id),
+    contractor_org_id TEXT NOT NULL REFERENCES organizations(organization_id),
+    facility_id TEXT REFERENCES facilities(facility_id),
+    valid_from TEXT NOT NULL,
+    valid_to TEXT NOT NULL,
+    sla_json TEXT NOT NULL,
+    created_by TEXT NOT NULL REFERENCES actors(actor_id),
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS incidents (
+    incident_id TEXT PRIMARY KEY,
+    facility_id TEXT NOT NULL REFERENCES facilities(facility_id),
+    site_id TEXT NOT NULL REFERENCES sites(site_id),
+    status TEXT NOT NULL,
+    reported_severity TEXT NOT NULL,
+    risk_level TEXT NOT NULL,
+    impact_json TEXT NOT NULL,
+    affected_groups_json TEXT NOT NULL,
+    frozen_contractor_org TEXT NOT NULL,
+    frozen_contract_id TEXT NOT NULL,
+    sla_json TEXT NOT NULL,
+    opened_at TEXT NOT NULL,
+    due_response_at TEXT NOT NULL,
+    due_measure_at TEXT NOT NULL,
+    due_repair_at TEXT NOT NULL,
+    escalation_level INTEGER NOT NULL DEFAULT 0 CHECK(escalation_level >= 0),
+    recurrence_count INTEGER NOT NULL DEFAULT 0 CHECK(recurrence_count >= 0),
+    recurrence_of_incident_id TEXT,
+    reopened_at TEXT,
+    reopened_by TEXT,
+    basis_reinspection_id TEXT,
+    guarantee_until TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS work_orders (
+    work_order_id TEXT PRIMARY KEY,
+    incident_id TEXT NOT NULL REFERENCES incidents(incident_id),
+    seq INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    contractor_org_id TEXT NOT NULL,
+    contract_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    due_response_at TEXT,
+    due_repair_at TEXT NOT NULL,
+    due_reinspect_at TEXT,
+    responded_at TEXT,
+    completed_at TEXT,
+    completed_by TEXT,
+    continued_from_work_order_id TEXT,
+    summary TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(incident_id, seq)
+);
+CREATE TABLE IF NOT EXISTS temporary_measures (
+    measure_id TEXT PRIMARY KEY,
+    incident_id TEXT NOT NULL REFERENCES incidents(incident_id),
+    work_order_id TEXT REFERENCES work_orders(work_order_id),
+    provider_org_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    description TEXT NOT NULL,
+    valid_from TEXT NOT NULL,
+    valid_to TEXT NOT NULL,
+    handover_rule TEXT NOT NULL,
+    status TEXT NOT NULL,
+    supersedes_measure_id TEXT,
+    handed_over_to TEXT,
+    handed_over_at TEXT,
+    handover_note TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS reinspections (
+    reinspection_id TEXT PRIMARY KEY,
+    incident_id TEXT NOT NULL REFERENCES incidents(incident_id),
+    work_order_id TEXT NOT NULL REFERENCES work_orders(work_order_id),
+    inspector_actor_id TEXT NOT NULL,
+    inspector_org_id TEXT NOT NULL,
+    result TEXT NOT NULL CHECK(result IN ('pass', 'fail')),
+    independent INTEGER NOT NULL CHECK(independent IN (0, 1)),
+    evidence_json TEXT NOT NULL,
+    evidence_hash TEXT NOT NULL,
+    note TEXT NOT NULL,
+    withdrawn INTEGER NOT NULL DEFAULT 0 CHECK(withdrawn IN (0, 1)),
+    withdrawn_by TEXT,
+    withdrawn_at TEXT,
+    withdrawn_reason TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS incident_events (
+    event_id TEXT PRIMARY KEY,
+    incident_id TEXT NOT NULL REFERENCES incidents(incident_id),
+    seq INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    work_order_id TEXT,
+    measure_id TEXT,
+    reinspection_id TEXT,
+    detail_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(incident_id, seq)
+);
+CREATE TABLE IF NOT EXISTS notifications (
+    notification_id TEXT PRIMARY KEY,
+    incident_id TEXT NOT NULL REFERENCES incidents(incident_id),
+    event_seq INTEGER,
+    recipient_kind TEXT NOT NULL,
+    recipient_id TEXT NOT NULL,
+    recipient_label TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS overdue_flags (
+    incident_id TEXT NOT NULL REFERENCES incidents(incident_id),
+    flag_key TEXT NOT NULL,
+    escalation_level INTEGER NOT NULL,
+    first_flagged_at TEXT NOT NULL,
+    resolved_at TEXT,
+    PRIMARY KEY(incident_id, flag_key)
+);
 """
 
 

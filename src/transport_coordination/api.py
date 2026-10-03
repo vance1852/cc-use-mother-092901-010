@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from .accessibility import AccessibilityService
 from .errors import DomainError, ValidationError
 from .service import DomainService
 from .storage import Database
@@ -20,7 +21,13 @@ def route(service: DomainService, method: str, path: str, body: dict[str, Any] |
     headers = headers or {}
     body = body or {}
     parsed = urlparse(path)
+    query = parse_qs(parsed.query)
     actor_id = headers.get("X-Actor-Id", "")
+    a11y = AccessibilityService(service)
+
+    def q(name: str, default: str | None = None) -> str | None:
+        return query.get(name, [default])[0]
+
     try:
         if method == "GET" and parsed.path == "/health":
             valid, count = service.verify_audit()
@@ -38,16 +45,65 @@ def route(service: DomainService, method: str, path: str, body: dict[str, Any] |
             receipt = service.record_domain_data(actor_id=actor_id, **body)
             return 200 if receipt.replayed else 201, receipt.__dict__
         if method == "GET" and parsed.path == "/domain-records":
-            query = parse_qs(parsed.query)
-            site_id = query.get("site_id", [""])[0]
+            site_id = q("site_id", "")
             if not site_id:
                 raise ValidationError("site_id 不能为空")
-            category = query.get("category", [None])[0]
-            return 200, {"items": [item.__dict__ for item in service.list_domain_data(site_id, category)]}
+            return 200, {"items": [item.__dict__ for item in service.list_domain_data(site_id, q("category"))]}
         if method == "GET" and parsed.path == "/audit-events":
-            query = parse_qs(parsed.query)
-            after = int(query.get("after_sequence", ["0"])[0])
+            after = int(q("after_sequence", "0"))
             return 200, {"items": service.audit_events(after)}
+
+        # ------------------------------------------------ 无障碍设施缺陷整改与复开
+        if method == "POST" and parsed.path == "/facilities":
+            result = a11y.register_facility(actor_id=actor_id, **body)
+            return 200 if result.get("replayed") else 201, result
+        if method == "POST" and parsed.path == "/maintenance-contracts":
+            result = a11y.register_maintenance_contract(actor_id=actor_id, **body)
+            return 200 if result.get("replayed") else 201, result
+        if method == "POST" and parsed.path == "/defect-reports":
+            result = a11y.report_defect(actor_id=actor_id, **body)
+            return 200 if result.get("replayed") else 201, result
+        if method == "POST" and parsed.path == "/work-orders/respond":
+            return 200, a11y.respond_to_work_order(actor_id=actor_id, **body)
+        if method == "POST" and parsed.path == "/temporary-measures":
+            result = a11y.activate_temporary_measure(actor_id=actor_id, **body)
+            return 200 if result.get("replayed") else 201, result
+        if method == "POST" and parsed.path == "/temporary-measures/handover":
+            return 200, a11y.handover_measure(actor_id=actor_id, **body)
+        if method == "POST" and parsed.path == "/work-orders/complete":
+            return 200, a11y.complete_repair(actor_id=actor_id, **body)
+        if method == "POST" and parsed.path == "/reinspections":
+            result = a11y.submit_reinspection(actor_id=actor_id, **body)
+            return 200 if result.get("replayed") else 201, result
+        if method == "POST" and parsed.path == "/reinspections/withdraw":
+            return 200, a11y.withdraw_reinspection(actor_id=actor_id, **body)
+        if method == "POST" and parsed.path == "/incidents/transfer":
+            return 200, a11y.transfer_responsibility(actor_id=actor_id, **body)
+        if method == "POST" and parsed.path == "/sweeps":
+            return 200, a11y.run_sweep()
+        if method == "GET" and parsed.path == "/routes":
+            if not q("site_id"):
+                raise ValidationError("site_id 不能为空")
+            return 200, a11y.available_routes(q("site_id"))
+        if method == "GET" and parsed.path == "/expiring-commitments":
+            if not q("site_id"):
+                raise ValidationError("site_id 不能为空")
+            within = float(q("within_hours", "24"))
+            return 200, a11y.expiring_commitments(q("site_id"), within)
+        if method == "GET" and parsed.path == "/overdue":
+            if not q("site_id"):
+                raise ValidationError("site_id 不能为空")
+            return 200, a11y.overdue_board(q("site_id"))
+        if method == "GET" and parsed.path == "/incidents":
+            if not q("id"):
+                raise ValidationError("id 不能为空")
+            return 200, a11y.get_incident(q("id"))
+        if method == "GET" and parsed.path == "/facility-snapshot":
+            facility_id = q("facility_id")
+            at = q("at")
+            if not facility_id or not at:
+                raise ValidationError("facility_id 与 at 不能为空")
+            return 200, a11y.snapshot_facility_at(facility_id, at)
         return 404, {"error": "route_not_found", "message": "接口不存在"}
     except DomainError as exc:
         return exc.status, {"error": exc.code, "message": str(exc)}
