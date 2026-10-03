@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .errors import DomainError, ValidationError
+from .accessibility import AccessibilityService
 from .service import DomainService
 from .storage import Database
 
@@ -20,6 +21,7 @@ def route(service: DomainService, method: str, path: str, body: dict[str, Any] |
     headers = headers or {}
     body = body or {}
     parsed = urlparse(path)
+    query = parse_qs(parsed.query)
     actor_id = headers.get("X-Actor-Id", "")
     try:
         if method == "GET" and parsed.path == "/health":
@@ -38,16 +40,74 @@ def route(service: DomainService, method: str, path: str, body: dict[str, Any] |
             receipt = service.record_domain_data(actor_id=actor_id, **body)
             return 200 if receipt.replayed else 201, receipt.__dict__
         if method == "GET" and parsed.path == "/domain-records":
-            query = parse_qs(parsed.query)
             site_id = query.get("site_id", [""])[0]
             if not site_id:
                 raise ValidationError("site_id 不能为空")
             category = query.get("category", [None])[0]
             return 200, {"items": [item.__dict__ for item in service.list_domain_data(site_id, category)]}
         if method == "GET" and parsed.path == "/audit-events":
-            query = parse_qs(parsed.query)
             after = int(query.get("after_sequence", ["0"])[0])
             return 200, {"items": service.audit_events(after)}
+
+        # ---- 无障碍设施缺陷整改与复开 ----
+        if not isinstance(service, AccessibilityService):
+            return 404, {"error": "route_not_found", "message": "接口不存在"}
+        if method == "POST" and parsed.path == "/facilities":
+            receipt = service.register_facility(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/maintenance-contracts":
+            receipt = service.register_contract(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/defects":
+            receipt = service.report_defect(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/work-orders/respond":
+            receipt = service.respond_work_order(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/interim-measures":
+            receipt = service.commit_interim(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/work-orders/complete":
+            receipt = service.complete_work_order(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/reinspections":
+            receipt = service.submit_reinspection(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/evidence/withdraw":
+            receipt = service.withdraw_evidence(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/responsibility-transfers":
+            receipt = service.transfer_responsibility(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/sweep":
+            return 200, service.sweep()
+        if method == "GET" and parsed.path == "/accessible-routes":
+            site_id = query.get("site_id", [""])[0]
+            if not site_id:
+                raise ValidationError("site_id 不能为空")
+            return 200, service.accessible_routes(site_id)
+        if method == "GET" and parsed.path == "/expiring-commitments":
+            site_id = query.get("site_id", [""])[0]
+            if not site_id:
+                raise ValidationError("site_id 不能为空")
+            within = int(query.get("within_hours", ["24"])[0])
+            return 200, service.expiring_commitments(site_id, within)
+        if method == "GET" and parsed.path == "/overdue-board":
+            site_id = query.get("site_id", [""])[0]
+            if not site_id:
+                raise ValidationError("site_id 不能为空")
+            return 200, service.overdue_board(site_id)
+        if method == "GET" and parsed.path == "/defect-chain":
+            chain_id = query.get("chain_id", [""])[0]
+            if not chain_id:
+                raise ValidationError("chain_id 不能为空")
+            return 200, service.chain_view(chain_id)
+        if method == "GET" and parsed.path == "/facility-history":
+            facility_id = query.get("facility_id", [""])[0]
+            at = query.get("at", [""])[0]
+            if not facility_id or not at:
+                raise ValidationError("facility_id 和 at 不能为空")
+            return 200, service.facility_as_of(facility_id, at)
         return 404, {"error": "route_not_found", "message": "接口不存在"}
     except DomainError as exc:
         return exc.status, {"error": exc.code, "message": str(exc)}
@@ -99,7 +159,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
     database = Database(args.database)
-    Handler.service = DomainService(database)
+    Handler.service = AccessibilityService(database)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     try:
         server.serve_forever()
